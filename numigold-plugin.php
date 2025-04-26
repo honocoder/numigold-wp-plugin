@@ -76,27 +76,75 @@ function render_metals_settings_page() {
     <?php
 }
 
-// === 3. SHORTCODE D'ESTIMATION ===
+// === 3. SHORTCODE D'ESTIMATION AMÉLIORÉ ===
 add_shortcode('estimate_form', 'render_estimation_form');
 
 function render_estimation_form() {
     $rates = get_option('metals_rates', []);
     $margin = get_option('metals_margin', 10);
+    $metals_names = [
+        'XAU' => 'Or',
+        'XAG' => 'Argent',
+        'XPT' => 'Platine',
+        'XPD' => 'Palladium'
+    ];
     ob_start();
     ?>
-    <form id="metals-estimation-form">
-        <label>Métal :
+    <style>
+        .estimation-section {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .estimation-form {
+            display: inline-block;
+            text-align: left;
+            max-width: 400px;
+            width: 100%;
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+            font-family: Arial, sans-serif;
+        }
+        .estimation-form label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        .estimation-form select,
+        .estimation-form input {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        #estimation-result {
+            font-size: 1.5em;
+            color: #2a9d8f;
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+        }
+    </style>
+
+    <div class="estimation-section">
+        <form id="metals-estimation-form" class="estimation-form">
+            <label for="metal">Métal :</label>
             <select id="metal">
                 <?php foreach ($rates as $metal => $price): ?>
-                    <option value="<?php echo esc_attr($metal); ?>"><?php echo esc_html($metal); ?></option>
+                    <option value="<?php echo esc_attr($metal); ?>"><?php echo esc_html($metals_names[$metal] ?? $metal); ?></option>
                 <?php endforeach; ?>
             </select>
-        </label><br>
-        <label>Poids (g) :
+
+            <label for="weight">Poids (g) :</label>
             <input type="number" step="0.01" id="weight" />
-        </label><br>
-        <p>Estimation : <strong id="estimation-result">--</strong> €</p>
-    </form>
+
+            <div>Estimation :</div>
+            <strong id="estimation-result">-- €</strong>
+        </form>
+    </div>
 
     <script type="application/json" id="metalRatesJson"><?php echo json_encode($rates); ?></script>
     <script>
@@ -114,9 +162,9 @@ function render_estimation_form() {
                 if (!isNaN(weight) && rate) {
                     const brut = weight * rate;
                     const net = brut * (1 - (margin / 100));
-                    resultDisplay.textContent = net.toFixed(2);
+                    resultDisplay.textContent = net.toFixed(2) + ' €';
                 } else {
-                    resultDisplay.textContent = '--';
+                    resultDisplay.textContent = '-- €';
                 }
             }
 
@@ -128,7 +176,7 @@ function render_estimation_form() {
     return ob_get_clean();
 }
 
-// === 4. SHORTCODE COURS DES MÉTAUX ===
+// === 4. SHORTCODE COURS DES MÉTAUX AVEC FADE-IN ===
 add_shortcode('metals_prices', function() {
     $rates = get_option('metals_rates', []);
     $last_update = get_option('metals_last_update', '');
@@ -147,6 +195,13 @@ add_shortcode('metals_prices', function() {
         .metals-section {
             text-align: center;
             padding: 40px 20px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.6s ease-in-out;
+        }
+        .metals-section.visible {
+            opacity: 1;
+            transform: translateY(0);
         }
         .metals-table {
             margin: 0 auto;
@@ -170,7 +225,7 @@ add_shortcode('metals_prices', function() {
             font-size: 1.2em;
         }
     </style>
-    <div class="metals-section">
+    <div class="metals-section" id="metals-section">
         <h2>Prix des Métaux Précieux</h2>
         <table class="metals-table">
             <thead>
@@ -190,6 +245,11 @@ add_shortcode('metals_prices', function() {
         </table>
         <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Dernière mise à jour : <?php echo esc_html($last_update); ?></p>
     </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('metals-section').classList.add('visible');
+        });
+    </script>
     <?php
     return ob_get_clean();
 });
