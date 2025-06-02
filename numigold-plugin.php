@@ -2,7 +2,7 @@
 /*
 Plugin Name: Numigold Plugin
 Description: Affiche un formulaire d'estimation basé sur le poids et le métal choisi, avec récupération automatique des cours via GoldAPI et mise à jour du taux de change.
-Version: 1.2
+Version: 1.6
 Author: Jimy Marletta
 */
 
@@ -10,16 +10,17 @@ Author: Jimy Marletta
 add_action('metals_daily_cron', 'update_metals_prices');
 
 function update_metals_prices() {
-    $api_key = 'mykey'; // Replace with GoldAPI key
+    $api_key = 'goldapi-4fv4sm9ybacsp-io';
     $metals = ['XAU', 'XAG', 'XPT', 'XPD'];
     $prices = [];
 
-    $exchange_response = wp_remote_get('https://api.exchangerate.host/latest?base=USD&symbols=EUR');
+    $exchange_response = wp_remote_get('https://api.frankfurter.app/latest?from=USD&to=EUR');
     $usd_to_eur = 0.93;
     if (!is_wp_error($exchange_response)) {
         $exchange_data = json_decode(wp_remote_retrieve_body($exchange_response), true);
         if (!empty($exchange_data['rates']['EUR'])) {
             $usd_to_eur = floatval($exchange_data['rates']['EUR']);
+            update_option('usd_to_eur_used', $usd_to_eur);
         }
     }
 
@@ -35,10 +36,21 @@ function update_metals_prices() {
         if (is_wp_error($response)) continue;
 
         $data = json_decode(wp_remote_retrieve_body($response), true);
-        if (!empty($data['price'])) {
+
+        if ($metal === 'XAU' && !empty($data['price_gram_24k'])) {
+            $variants = [
+    'XAU_24k' => $data['price_gram_24k'],
+    'XAU_22k' => $data['price_gram_22k'],
+    'XAU_18k' => $data['price_gram_18k'],
+    'XAU_14k' => $data['price_gram_14k'],
+    'XAU_9k'  => $data['price_gram_9k']
+];
+            foreach ($variants as $variant => $usd_price) {
+                $prices[$variant] = round($usd_price * $usd_to_eur, 2);
+            }
+        } elseif (!empty($data['price'])) {
             $price_per_gram_usd = $data['price'] / 31.1035;
-            $price_per_gram_eur = $price_per_gram_usd * $usd_to_eur;
-            $prices[$metal] = round($price_per_gram_eur, 2);
+            $prices[$metal] = round($price_per_gram_usd * $usd_to_eur, 2);
         }
     }
 
@@ -50,6 +62,12 @@ function update_metals_prices() {
 
 if (!wp_next_scheduled('metals_daily_cron')) {
     wp_schedule_event(time(), 'daily', 'metals_daily_cron');
+}
+
+// TEMP : mise à jour manuelle immédiate
+if (isset($_GET['force_metals_update']) && current_user_can('manage_options')) {
+    update_metals_prices();
+    echo "<div style='background:#dff0d8;padding:10px;border-radius:5px;'>Cours des métaux mis à jour manuellement.</div>";
 }
 
 // === 2. PAGE RÉGLAGES ADMIN ===
@@ -72,22 +90,17 @@ function render_metals_settings_page() {
             </label>
             <p><input type="submit" class="button-primary" value="Enregistrer" /></p>
         </form>
+        <p>Taux USD → EUR utilisé actuellement : <strong><?php echo number_format(get_option('usd_to_eur_used', 0.93), 4, ',', ' '); ?></strong></p>
     </div>
     <?php
 }
 
-// === 3. SHORTCODE D'ESTIMATION AMÉLIORÉ ===
+// === 3. SHORTCODE FORMULAIRE ESTIMATION ===
 add_shortcode('estimate_form', 'render_estimation_form');
 
 function render_estimation_form() {
     $rates = get_option('metals_rates', []);
     $margin = get_option('metals_margin', 10);
-    $metals_names = [
-        'XAU' => 'Or',
-        'XAG' => 'Argent',
-        'XPT' => 'Platine',
-        'XPD' => 'Palladium'
-    ];
     ob_start();
     ?>
     <style>
@@ -133,13 +146,25 @@ function render_estimation_form() {
         <form id="metals-estimation-form" class="estimation-form">
             <label for="metal">Métal :</label>
             <select id="metal">
-                <?php foreach ($rates as $metal => $price): ?>
-                    <option value="<?php echo esc_attr($metal); ?>"><?php echo esc_html($metals_names[$metal] ?? $metal); ?></option>
-                <?php endforeach; ?>
+                <option value="XAU">Or</option>
+                <?php if (isset($rates['XAG'])): ?><option value="XAG">Argent</option><?php endif; ?>
+                <?php if (isset($rates['XPT'])): ?><option value="XPT">Platine</option><?php endif; ?>
+                <?php if (isset($rates['XPD'])): ?><option value="XPD">Palladium</option><?php endif; ?>
             </select>
 
+            <div id="carat-group" style="display:none;">
+                <label for="carat">Carat :</label>
+                <select id="carat">
+                    <?php if (isset($rates['XAU_24k'])): ?><option value="24k">24k</option><?php endif; ?>
+                    <?php if (isset($rates['XAU_22k'])): ?><option value="22k">22k</option><?php endif; ?>
+                    <?php if (isset($rates['XAU_18k'])): ?><option value="18k">18k</option><?php endif; ?>
+                    <?php if (isset($rates['XAU_14k'])): ?><option value="14k">14k</option><?php endif; ?>
+                    <?php if (isset($rates['XAU_9k'])): ?><option value="9k">9k</option><?php endif; ?>
+                </select>
+            </div>
+
             <label for="weight">Poids (g) :</label>
-            <input type="number" step="0.01" id="weight" />
+            <input type="number" step="0.01" id="weight" value="1" />
 
             <div>Estimation :</div>
             <strong id="estimation-result">-- €</strong>
@@ -152,13 +177,29 @@ function render_estimation_form() {
             const rates = JSON.parse(document.getElementById('metalRatesJson').textContent);
             const margin = <?php echo floatval($margin); ?>;
             const metalSelect = document.getElementById('metal');
+            const caratGroup = document.getElementById('carat-group');
+            const caratSelect = document.getElementById('carat');
             const weightInput = document.getElementById('weight');
             const resultDisplay = document.getElementById('estimation-result');
 
-            function calculate() {
+            function getSelectedRate() {
                 const metal = metalSelect.value;
+                if (metal === 'XAU') {
+                    const carat = caratSelect.value;
+                    return rates[`XAU_${carat}`] || null;
+                } else {
+                    return rates[metal] || null;
+                }
+            }
+
+            function updateCaratVisibility() {
+                caratGroup.style.display = (metalSelect.value === 'XAU') ? 'block' : 'none';
+                calculate();
+            }
+
+            function calculate() {
                 const weight = parseFloat(weightInput.value);
-                const rate = rates[metal];
+                const rate = getSelectedRate();
                 if (!isNaN(weight) && rate) {
                     const brut = weight * rate;
                     const net = brut * (1 - (margin / 100));
@@ -168,26 +209,22 @@ function render_estimation_form() {
                 }
             }
 
-            metalSelect.addEventListener('change', calculate);
+            metalSelect.addEventListener('change', updateCaratVisibility);
+            caratSelect.addEventListener('change', calculate);
             weightInput.addEventListener('input', calculate);
+            updateCaratVisibility();
+calculate();
         })();
     </script>
     <?php
     return ob_get_clean();
 }
 
-// === 4. SHORTCODE COURS DES MÉTAUX AVEC FADE-IN ===
+// === 4. SHORTCODE COURS DES MÉTAUX ===
 add_shortcode('metals_prices', function() {
     $rates = get_option('metals_rates', []);
     $last_update = get_option('metals_last_update', '');
     if (empty($rates)) return '<p>Données non disponibles.</p>';
-
-    $metals_names = [
-        'XAU' => 'Or',
-        'XAG' => 'Argent',
-        'XPT' => 'Platine',
-        'XPD' => 'Palladium'
-    ];
 
     ob_start();
     ?>
@@ -235,12 +272,14 @@ add_shortcode('metals_prices', function() {
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($rates as $metal => $price): ?>
-                <tr>
-                    <td><?php echo esc_html($metals_names[$metal] ?? $metal); ?></td>
-                    <td><?php echo number_format($price, 2, ',', ' '); ?> €</td>
-                </tr>
-            <?php endforeach; ?>
+                <?php if (isset($rates['XAU_24k']) || isset($rates['XAU_18k']) || isset($rates['XAU_14k'])): ?>
+                    <tr><td><strong>Or 24k</strong></td><td><?php echo number_format($rates['XAU_24k'], 2, ',', ' ') ?> €</td></tr>
+                    <?php if (isset($rates['XAU_18k'])): ?><tr><td>Or 18k</td><td><?php echo number_format($rates['XAU_18k'], 2, ',', ' ') ?> €</td></tr><?php endif; ?>
+                    <?php if (isset($rates['XAU_14k'])): ?><tr><td>Or 14k</td><td><?php echo number_format($rates['XAU_14k'], 2, ',', ' ') ?> €</td></tr><?php endif; ?>
+                <?php endif; ?>
+                <?php if (isset($rates['XAG'])): ?><tr><td>Argent</td><td><?php echo number_format($rates['XAG'], 2, ',', ' ') ?> €</td></tr><?php endif; ?>
+                <?php if (isset($rates['XPT'])): ?><tr><td>Platine</td><td><?php echo number_format($rates['XPT'], 2, ',', ' ') ?> €</td></tr><?php endif; ?>
+                <?php if (isset($rates['XPD'])): ?><tr><td>Palladium</td><td><?php echo number_format($rates['XPD'], 2, ',', ' ') ?> €</td></tr><?php endif; ?>
             </tbody>
         </table>
         <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Dernière mise à jour : <?php echo esc_html($last_update); ?></p>
